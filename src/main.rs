@@ -26,6 +26,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_systems(Startup, (spawn_camera, grid))
+        //.add_systems(Update, smooth_life)
         .run();
 }
 
@@ -67,11 +68,11 @@ fn grid(
             println!("x: {} range: {}", x, cell_count_x);
             commands.spawn((
                 Mesh2d(meshes.add(Rectangle::default())),
-                MeshMaterial2d(materials.add(Color::from(color(x, WHITE, BLACK)))),
+                MeshMaterial2d(materials.add(Color::from(color))),
                 Transform::from_xyz(2.5-screen.width + CELL_WIDTH*x as f32, screen.height - CELL_WIDTH*y as f32, 0.0)
                     .with_scale(Vec3::splat(5.0)),
                 Cell {
-                    mortal_state: 0.0
+                    mortal_state: 0.0,
                 }
             ));
             x += 1;
@@ -82,3 +83,15 @@ fn grid(
     }
     println!("done")
 }
+/*
+fn smooth_life(
+    mut query: Query<(&mut Cell, &Transform, &mut Handle<StandardMaterial>)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    handles: Query<&Handle<StandardMaterial>>
+) {
+    for cell in query.iter_mut() {
+        if cell.1.translation % 2.0 != Vec3::ZERO {
+            println!("handle: {:?}", handles)
+        }
+    }
+}*/
