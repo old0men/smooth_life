@@ -1,3 +1,7 @@
+mod spawn_cell;
+mod neighbor_check;
+
+use std::ops::Add;
 use bevy::color::palettes::basic::*;
 use bevy::input::common_conditions::{input_just_pressed, input_pressed};
 use bevy::prelude::*;
@@ -5,14 +9,18 @@ use bevy::reflect::utility::GenericTypeCell;
 use bevy::utils::HashMap;
 use bevy::window::PrimaryWindow;
 use bevy::window::WindowEvent::KeyboardInput;
+use std::{thread, time};
 
 const CELL_WIDTH: f32 = 20.0;
-const SMALL_STAR:[(i32, i32); 5] = [(0, 20), (20, 0), (0, -20), (-20, 0), (0, 0)];
+const SMALL_STAR:[(i32, i32); 5] = [(0, CELL_WIDTH as i32), (CELL_WIDTH as i32, 0), (0, -CELL_WIDTH as i32), (-CELL_WIDTH as i32, 0), (0, 0)];
+const FULL_NEIGHBORHOOD: [(i32, i32); 9] = [(-CELL_WIDTH as i32, CELL_WIDTH as i32), (0, CELL_WIDTH as i32), (CELL_WIDTH as i32, CELL_WIDTH as i32), (CELL_WIDTH as i32, 0), (CELL_WIDTH as i32, -CELL_WIDTH as i32), (0, -CELL_WIDTH as i32), (-CELL_WIDTH as i32, -CELL_WIDTH as i32), (-CELL_WIDTH as i32, 0), (0, 0)];
+pub const INVISIBLE: Color = Color::srgba(1.0, 1.0, 1.0, 0.03);
+pub const ALIVE: Color = Color::srgba(1.0, 1.0, 1.0, 1.0);
 
-pub const INVISIBLE: Color = Color::srgba(1.0, 1.0, 1.0, 1.0);
+pub const TIME_PER_FRAME: u64 = 150;
 
 #[derive(Component, Clone, Copy, Debug)]
-struct Cell {
+pub struct Cell {
     mortal_state: f32,
     position: IVec2,
     live_neighbors: f32,
@@ -52,6 +60,19 @@ impl Cell {
     }
 }
 
+pub trait IVec2Extensions {
+    fn add_tuple(&mut self, tuple: (i32, i32)) -> IVec2;
+}
+
+impl IVec2Extensions for IVec2 {
+    fn add_tuple(&mut self, tuple: (i32, i32)) -> IVec2{
+        IVec2::new(self.x + tuple.0, self.y + tuple.1)
+    }
+}
+
+
+
+
 #[derive(Resource, Default)]
 struct CellMap(HashMap<IVec2, Cell>);
 
@@ -70,10 +91,8 @@ fn main() {
         .insert_resource(CellMap::default())
         .add_systems(Startup, spawn_camera)
         .add_systems(Update, (
-            neighborhood_check,
-            rules.run_if(input_pressed(KeyCode::Space)),
             spawn_cell.run_if(input_pressed(MouseButton::Left)),
-            clear_terminal
+            rules.run_if(input_pressed(KeyCode::Space)),
         ))
         .run();
 }
@@ -94,50 +113,47 @@ fn spawn_cell(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut cell_map: ResMut<CellMap>,
+    mut query: Query<(&mut Cell, &MeshMaterial2d<ColorMaterial>)>,
     q_windows: Single<&Window, With<PrimaryWindow>>
 ) {
     if let Some(click_position) = q_windows.cursor_position() {
         let screen = check_screen(*q_windows);
-        let spawn_position:IVec2 = integer_position(Vec2::new(click_position.x, click_position.y), Vec2::new(screen.width, screen.height));
+        let mut spawn_position:IVec2 = integer_position(Vec2::new(click_position.x, click_position.y), Vec2::new(screen.width, screen.height));
 
-        for (key, value) in cell_map.0.iter() {
-            println!("list on click: {key:?}; {value:?}")
-        }
+        for neighbor in FULL_NEIGHBORHOOD {
+            match cell_map.0.get_mut(&spawn_position.add_tuple(neighbor)) {
+                Some(mut cell) => {
 
-        match cell_map.0.get(&spawn_position) {
-            Some(cell) => {
-                if cell.mortal_state == 0.0 {
+                    if cell.mortal_state == 0.0 && neighbor == (0, 0) {
 
-                    cell_map.0.remove(&spawn_position);
-                    cell_map.0.insert(spawn_position, Cell::spawn_live(spawn_position));
-
-                    for (key, value) in cell_map.0.iter() {
-                        println!("animate cell: {key:?}; {value:?}")
+                        for (mut check_cell, handle) in query.iter_mut() {
+                            if check_cell.position == cell.position {
+                                if let Some(mut material) = materials.get_mut(handle) {
+                                    material.color = ALIVE;
+                                }
+                                check_cell.mortal_state = 1.0;
+                            }
+                        }
+                        cell.mortal_state = 1.0;
                     }
-
-                }
-            },
-            None => {
-                commands.spawn((
-                    Mesh2d(meshes.add(Rectangle::new(CELL_WIDTH, CELL_WIDTH))),
-                    MeshMaterial2d(materials.add(Color::from(WHITE))),
-                    Transform::from_xyz(spawn_position.x as f32, spawn_position.y as f32, 0.0),
-                    Cell::spawn_live(spawn_position)
-                ));
-
-                cell_map.0.insert(IVec2::new(spawn_position.x, spawn_position.y), Cell::spawn_live(spawn_position));
-
-                for dead_neighbor in SMALL_STAR {
-                    if dead_neighbor != (0, 0) {
-                        let dead_neighbor_position = IVec2::new(spawn_position.x + dead_neighbor.0, spawn_position.y + dead_neighbor.1);
+                },
+                None => {
+                    if neighbor != (0, 0) {
                         commands.spawn((
                             Mesh2d(meshes.add(Rectangle::new(CELL_WIDTH, CELL_WIDTH))),
                             MeshMaterial2d(materials.add(Color::from(INVISIBLE))),
-                            Transform::from_xyz(spawn_position.x as f32, spawn_position.y as f32, 0.0),
-                            Cell::spawn_dead(dead_neighbor_position)
+                            Transform::from_xyz((spawn_position.x + neighbor.0) as f32, (spawn_position.y + neighbor.1) as f32, 0.0),
+                            Cell::spawn_dead(spawn_position.add_tuple(neighbor))
                         ));
-
-                        cell_map.0.insert(dead_neighbor_position, Cell::spawn_dead(dead_neighbor_position));
+                        cell_map.0.insert(spawn_position.add_tuple(neighbor), Cell::spawn_dead(spawn_position.add_tuple(neighbor)));
+                    } else {
+                        commands.spawn((
+                            Mesh2d(meshes.add(Rectangle::new(CELL_WIDTH, CELL_WIDTH))),
+                            MeshMaterial2d(materials.add(Color::from(ALIVE))),
+                            Transform::from_xyz(spawn_position.x as f32, spawn_position.y as f32, 0.0),
+                            Cell::spawn_live(spawn_position)
+                        ));
+                        cell_map.0.insert(spawn_position, Cell::spawn_live(spawn_position));
                     }
                 }
             }
@@ -145,27 +161,30 @@ fn spawn_cell(
     }
 }
 
-fn neighborhood_check(
-    mut query: Query<&mut Cell>,
+
+fn rules(
+    mut commands: Commands,
+    mut query: Query<(&mut Cell, &MeshMaterial2d<ColorMaterial>)>,
     mut cell_map: ResMut<CellMap>,
+    mut materials: ResMut<Assets<ColorMaterial>>
 ) {
 
-    let mut cell_count = 0;
 
-    for mut cell in query.iter_mut() {
-        cell.live_neighbors = 0.0;
+    for (mut curr_cell, _) in query.iter_mut() {
 
-        for neighbor in SMALL_STAR {
+        for neighbor in FULL_NEIGHBORHOOD {
 
-            let key_value = IVec2::new(cell.position.x + neighbor.0, cell.position.y + neighbor.1);
-            match cell_map.0.get(&key_value) {
-                Some(neighbor) => {
-                    if neighbor.position == cell.position {
-                        println!("neighbor_check: {:?}", cell);
-                        cell_map.0.remove(&cell.position);
-                        cell_map.0.insert(cell.position, Cell::new(cell.mortal_state, cell.position, cell.live_neighbors));
+            let neighbor_position = IVec2::new(curr_cell.position.x + neighbor.0, curr_cell.position.y + neighbor.1);
+            match cell_map.0.get_mut(&neighbor_position) {
+                Some(mut next_cell) => {
+                    if neighbor == (0, 0) {
+                        println!("cell: {}; state: {}; neighbors: {}",curr_cell.position, curr_cell.mortal_state, curr_cell.live_neighbors);
+                        println!("-----------next: {}", next_cell.mortal_state);
+                        next_cell.live_neighbors = curr_cell.live_neighbors;
+
                     } else {
-                        cell.live_neighbors += neighbor.mortal_state
+                        curr_cell.live_neighbors += next_cell.mortal_state; //loading next
+                        //println!("{}", next_cell.mortal_state)
                     }
                 },
                 None => {
@@ -173,33 +192,43 @@ fn neighborhood_check(
                 }
             }
         }
-
-        cell_count += 1;
     }
-    println!("cell count: {}", cell_count);
-}
+    println!("----------");
 
-fn rules(
-    mut commands: Commands,
-    mut query: Query<(Entity, &mut Cell, &MeshMaterial2d<ColorMaterial>)>,
-    mut cell_map: ResMut<CellMap>,
-    mut materials: ResMut<Assets<ColorMaterial>>
-) {
-    for (entity, cell, handle) in query.iter_mut() {
-
-
-
+    // visual updates
+    for (mut cell, handle) in query.iter_mut() {
         match cell_map.0.get(&cell.position) {
-            Some(hash_cell) => {
-                if let Some(mut mat) = materials.get_mut(handle) {
-                    mat.color = Color::srgba(1.0, 1.0, 0.0, hash_cell.mortal_state);
-                    println!("{:?}=?{:?}", hash_cell.mortal_state, cell.mortal_state)
+            Some(next_cell) => {
+                if next_cell.live_neighbors > 1.0 && next_cell.live_neighbors < 4.0 && next_cell.mortal_state == 1.0{
+                    if let Some(mut curr_mat) = materials.get_mut(handle) {
+                        curr_mat.color = Color::srgba(1.0, 1.0, 1.0, 1.0);
+                    }
+                    cell.mortal_state = 1.0;
+                    cell.live_neighbors = 0.0;
+
+                } else if next_cell.live_neighbors == 3.0 && next_cell.mortal_state == 0.0 {
+                    if let Some(mut curr_mat) = materials.get_mut(handle) {
+                        curr_mat.color = Color::srgba(0.0, 1.0, 0.0, 1.0);
+                    }
+                    cell.mortal_state = 1.0;
+                    cell.live_neighbors = 0.0;
+
+                } else {
+                    if let Some(mut curr_mat) = materials.get_mut(handle) {
+                        curr_mat.color = Color::srgba(1.0, 0.0, 0.0, 0.0);
+                    }
+                    cell.mortal_state = 0.0;
+                    cell.live_neighbors = 0.0;
 
                 }
-            },
+            }
             None => {}
         }
     }
+
+    let ten_millis = time::Duration::from_millis(TIME_PER_FRAME);
+
+    thread::sleep(ten_millis);
 }
 
 fn integer_position(click_position: Vec2, screen: Vec2) -> IVec2 {
@@ -214,10 +243,6 @@ fn integer_position(click_position: Vec2, screen: Vec2) -> IVec2 {
 
 }
 
-
-fn clear_terminal(){
-    print!("\x1B[2J\x1B[1;1H");
-}
 /*
 
 pub fn check_electrons(
