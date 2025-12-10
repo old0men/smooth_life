@@ -15,9 +15,9 @@ const CELL_WIDTH: f32 = 20.0;
 const SMALL_STAR:[(i32, i32); 5] = [(0, CELL_WIDTH as i32), (CELL_WIDTH as i32, 0), (0, -CELL_WIDTH as i32), (-CELL_WIDTH as i32, 0), (0, 0)];
 const FULL_NEIGHBORHOOD: [(i32, i32); 9] = [(-CELL_WIDTH as i32, CELL_WIDTH as i32), (0, CELL_WIDTH as i32), (CELL_WIDTH as i32, CELL_WIDTH as i32), (CELL_WIDTH as i32, 0), (CELL_WIDTH as i32, -CELL_WIDTH as i32), (0, -CELL_WIDTH as i32), (-CELL_WIDTH as i32, -CELL_WIDTH as i32), (-CELL_WIDTH as i32, 0), (0, 0)];
 pub const INVISIBLE: Color = Color::srgba(1.0, 1.0, 1.0, 0.03);
-pub const ALIVE: Color = Color::srgba(1.0, 1.0, 1.0, 1.0);
+pub const ALIVE: Color = Color::srgba(1.0, 1.0, 1.0, 0.999);
 
-pub const TIME_PER_FRAME: u64 = 150;
+pub const TIME_PER_FRAME: u64 = 32;
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Cell {
@@ -58,6 +58,14 @@ impl Cell {
     fn neighborhood_update (&mut self, neighbors: f32) {
         self.live_neighbors = neighbors;
     }
+
+    fn is_dead(&self) -> bool {
+        if self.mortal_state == 0.0 {true} else {false}
+    }
+
+    fn is_alive(&self) -> bool {
+        if self.mortal_state == 0.0 {false} else {true}
+    }
 }
 
 pub trait IVec2Extensions {
@@ -75,6 +83,17 @@ impl IVec2Extensions for IVec2 {
 
 #[derive(Resource, Default)]
 struct CellMap(HashMap<IVec2, Cell>);
+
+impl CellMap {
+    fn update_mortal(&mut self, position: IVec2, mortal_state: f32) {
+        match self.0.get_mut(&position) {
+            Some(mut map_cell) => {
+                map_cell.mortal_state = mortal_state;
+            },
+            _ => {}
+        }
+    }
+}
 
 struct Screen {
     width: f32,
@@ -116,16 +135,45 @@ fn spawn_cell(
     mut query: Query<(&mut Cell, &MeshMaterial2d<ColorMaterial>)>,
     q_windows: Single<&Window, With<PrimaryWindow>>
 ) {
+
+    let mut alive = 0;
+    let mut dead = 0;
+    let mut map_alive = 0;
+    let mut map_dead = 0;
+
+    for (cell, _) in query.iter() {
+        if cell.mortal_state == 1.0 {
+            alive += 1
+        } else {
+            dead += 1
+        }
+    }
+
+    for (_, cell) in cell_map.0.iter_mut() {
+        if cell.mortal_state == 1.0 {
+            map_alive += 1
+        } else {
+            map_dead += 1
+        }
+    }
+    println!("main alive: {}, dead: {}", alive, dead);
+    println!("map alive: {}, dead: {}", map_alive, map_dead);
+    println!("--------------------------");
+
     if let Some(click_position) = q_windows.cursor_position() {
         let screen = check_screen(*q_windows);
-        let mut spawn_position:IVec2 = integer_position(Vec2::new(click_position.x, click_position.y), Vec2::new(screen.width, screen.height));
+        let mut spawn_position: IVec2 = integer_position(Vec2::new(click_position.x, click_position.y), Vec2::new(screen.width, screen.height));
 
         for neighbor in FULL_NEIGHBORHOOD {
             match cell_map.0.get_mut(&spawn_position.add_tuple(neighbor)) {
                 Some(mut cell) => {
-
-                    if cell.mortal_state == 0.0 && neighbor == (0, 0) {
-
+                    println!("is this cell dead?");
+                    match cell.mortal_state {
+                        1.0 => println!("alive"),
+                        0.0 => println!("dead"),
+                        _ => {}
+                    }
+                    if cell.is_dead() && neighbor == (0, 0) {
                         for (mut check_cell, handle) in query.iter_mut() {
                             if check_cell.position == cell.position {
                                 if let Some(mut material) = materials.get_mut(handle) {
@@ -164,67 +212,49 @@ fn spawn_cell(
 
 fn rules(
     mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
     mut query: Query<(&mut Cell, &MeshMaterial2d<ColorMaterial>)>,
     mut cell_map: ResMut<CellMap>,
-    mut materials: ResMut<Assets<ColorMaterial>>
 ) {
+    for (mut cell, _) in query.iter_mut() {
+        cell.live_neighbors = 0.0;
 
-
-    for (mut curr_cell, _) in query.iter_mut() {
-
-        for neighbor in FULL_NEIGHBORHOOD {
-
-            let neighbor_position = IVec2::new(curr_cell.position.x + neighbor.0, curr_cell.position.y + neighbor.1);
-            match cell_map.0.get_mut(&neighbor_position) {
-                Some(mut next_cell) => {
-                    if neighbor == (0, 0) {
-                        println!("cell: {}; state: {}; neighbors: {}",curr_cell.position, curr_cell.mortal_state, curr_cell.live_neighbors);
-                        println!("-----------next: {}", next_cell.mortal_state);
-                        next_cell.live_neighbors = curr_cell.live_neighbors;
-
-                    } else {
-                        curr_cell.live_neighbors += next_cell.mortal_state; //loading next
-                        //println!("{}", next_cell.mortal_state)
-                    }
-                },
-                None => {
-
+        for neighbor_position in FULL_NEIGHBORHOOD {
+            if neighbor_position != (0, 0) {
+                match cell_map.0.get_mut(&(cell.position.add_tuple(neighbor_position))) {
+                    Some(mut neighbor_cell) => {
+                        cell.live_neighbors += neighbor_cell.mortal_state;
+                    },
+                    _ => {}
                 }
             }
         }
     }
-    println!("----------");
 
-    // visual updates
     for (mut cell, handle) in query.iter_mut() {
-        match cell_map.0.get(&cell.position) {
-            Some(next_cell) => {
-                if next_cell.live_neighbors > 1.0 && next_cell.live_neighbors < 4.0 && next_cell.mortal_state == 1.0{
-                    if let Some(mut curr_mat) = materials.get_mut(handle) {
-                        curr_mat.color = Color::srgba(1.0, 1.0, 1.0, 1.0);
-                    }
-                    cell.mortal_state = 1.0;
-                    cell.live_neighbors = 0.0;
-
-                } else if next_cell.live_neighbors == 3.0 && next_cell.mortal_state == 0.0 {
-                    if let Some(mut curr_mat) = materials.get_mut(handle) {
-                        curr_mat.color = Color::srgba(0.0, 1.0, 0.0, 1.0);
-                    }
-                    cell.mortal_state = 1.0;
-                    cell.live_neighbors = 0.0;
-
-                } else {
-                    if let Some(mut curr_mat) = materials.get_mut(handle) {
-                        curr_mat.color = Color::srgba(1.0, 0.0, 0.0, 0.0);
-                    }
-                    cell.mortal_state = 0.0;
-                    cell.live_neighbors = 0.0;
-
-                }
+        println!("live_neighbors: {}", cell.live_neighbors);
+        if cell.live_neighbors < 4.0 && cell.live_neighbors > 1.0 && cell.is_alive() {
+            if let Some(mut material) = materials.get_mut(handle) {
+                material.color = Color::from(ALIVE)
             }
-            None => {}
+            cell.mortal_state = 1.0;
+            cell_map.update_mortal(cell.position, cell.mortal_state);
+        } else if cell.live_neighbors == 3.0 && cell.is_dead() {
+            if let Some(mut material) = materials.get_mut(handle) {
+                material.color = Color::from(ALIVE)
+            }
+            cell.mortal_state = 1.0;
+            cell_map.update_mortal(cell.position, cell.mortal_state);
+        } else {
+            if let Some(mut material) = materials.get_mut(handle) {
+                material.color = Color::from(INVISIBLE)
+            }
+            cell.mortal_state = 0.0;
+            cell_map.update_mortal(cell.position, cell.mortal_state);
         }
     }
+
 
     let ten_millis = time::Duration::from_millis(TIME_PER_FRAME);
 
