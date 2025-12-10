@@ -112,6 +112,7 @@ fn main() {
         .add_systems(Update, (
             spawn_cell.run_if(input_pressed(MouseButton::Left)),
             rules.run_if(input_pressed(KeyCode::Space)),
+            update.run_if(input_pressed(KeyCode::Space)),
         ))
         .run();
 }
@@ -211,9 +212,6 @@ fn spawn_cell(
 
 
 fn rules(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
     mut query: Query<(&mut Cell, &MeshMaterial2d<ColorMaterial>)>,
     mut cell_map: ResMut<CellMap>,
 ) {
@@ -231,34 +229,35 @@ fn rules(
             }
         }
     }
+}
 
+fn update(
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut query: Query<(&mut Cell, &MeshMaterial2d<ColorMaterial>)>,
+    mut cell_map: ResMut<CellMap>,
+) {
     for (mut cell, handle) in query.iter_mut() {
         println!("live_neighbors: {}", cell.live_neighbors);
         if cell.live_neighbors < 4.0 && cell.live_neighbors > 1.0 && cell.is_alive() {
             if let Some(mut material) = materials.get_mut(handle) {
-                material.color = Color::from(ALIVE)
+            material.color = Color::from(ALIVE)
             }
             cell.mortal_state = 1.0;
             cell_map.update_mortal(cell.position, cell.mortal_state);
         } else if cell.live_neighbors == 3.0 && cell.is_dead() {
             if let Some(mut material) = materials.get_mut(handle) {
-                material.color = Color::from(ALIVE)
+            material.color = Color::from(ALIVE)
             }
             cell.mortal_state = 1.0;
             cell_map.update_mortal(cell.position, cell.mortal_state);
         } else {
             if let Some(mut material) = materials.get_mut(handle) {
-                material.color = Color::from(INVISIBLE)
+            material.color = Color::from(INVISIBLE)
             }
             cell.mortal_state = 0.0;
             cell_map.update_mortal(cell.position, cell.mortal_state);
         }
     }
-
-
-    let ten_millis = time::Duration::from_millis(TIME_PER_FRAME);
-
-    thread::sleep(ten_millis);
 }
 
 fn integer_position(click_position: Vec2, screen: Vec2) -> IVec2 {
